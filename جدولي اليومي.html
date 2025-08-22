@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>📅 جدولي اليومي — تفاعلي</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root{
+      --bg:#f4f6fb; --text:#1f2937; --card:#ffffff; --muted:#6b7280; --acc:#22c55e; --acc-2:#0ea5e9; --danger:#ef4444; --border:#e5e7eb;
+    }
+    body.dark{ --bg:#0f172a; --text:#e5e7eb; --card:#111827; --muted:#94a3b8; --acc:#16a34a; --acc-2:#38bdf8; --danger:#f87171; --border:#1f2937; }
+    *{ box-sizing: border-box }
+    body{ margin:0; background:var(--bg); color:var(--text); font-family:"Tahoma",system-ui,sans-serif; }
+    header{ position:sticky; top:0; z-index:50; background:linear-gradient(180deg,rgba(34,197,94,.08),rgba(0,0,0,0)); }
+    .wrap{ max-width:1000px; margin:0 auto; padding:14px 16px; }
+    h1{ margin:6px 0 10px; font-size:1.35rem; }
+    .toolbar{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .btn{ border:1px solid var(--border); background:var(--card); color:var(--text); padding:10px 12px; border-radius:10px; cursor:pointer; font-weight:700; }
+    .btn.primary{ background:var(--acc); color:#fff; border-color:transparent }
+    .btn.warn{ background:var(--danger); color:#fff; border-color:transparent }
+    .btn.ghost{ background:transparent }
+    .grid{ background:var(--card); border:1px solid var(--border); border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,.06); overflow:hidden; }
+    table{ width:100%; border-collapse:collapse; }
+    thead th{ background:rgba(56,189,248,.08); position:sticky; top:0; z-index:1; padding:10px; text-align:right; border-bottom:1px solid var(--border); font-size:.95rem }
+    tbody td{ border-bottom:1px dashed var(--border); padding:8px; vertical-align:middle }
+    tbody tr:hover{ background:rgba(34,197,94,.06) }
+    td[contenteditable="true"]{ background:rgba(0,0,0,.03); outline:none; border-radius:8px }
+    .narrow{ width:60px; text-align:center }
+    .time{ width:170px }
+    .drag-handle{ cursor:grab; user-select:none }
+    tr.dragging{ opacity:.5 }
+    .done td{ text-decoration: line-through; color: #16a34a }
+    .footer{ color:var(--muted); font-size:.85rem; text-align:center; margin:14px auto }
+    canvas{ width:100% !important; max-height:320px }
+    .toast{ position:fixed; inset-inline-start:50%; bottom:18px; transform:translateX(-50%); background:var(--card); color:var(--text); border:1px solid var(--border); padding:10px 14px; border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.15); opacity:0; pointer-events:none; transition:opacity .25s ease, transform .25s ease }
+    .toast.show{ opacity:1; transform:translate(-50%, -4px) }
+    .badge{ font-size:.85rem; color:var(--muted) }
+    @media (max-width:640px){ .time{ width:140px } .narrow{ width:50px } thead th:nth-child(2){display:none} tbody td:nth-child(2){display:none} }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>📅 جدولي اليومي <span class="badge">تفاعلي، محفوظ، مع تنبيهات</span></h1>
+      <div class="toolbar">
+        <button class="btn primary" id="addRowBtn">➕ إضافة نشاط</button>
+        <button class="btn" id="toggleDark">🌓 تبديل الوضع</button>
+        <button class="btn" id="exportBtn">⬇️ تصدير JSON</button>
+        <label class="btn ghost" for="importFile">⬆️ استيراد</label>
+        <input id="importFile" type="file" accept="application/json" style="display:none" />
+        <span class="badge">يُحفظ تلقائيًا (LocalStorage)</span>
+        <span class="badge" style="margin-inline-start:auto">🔔 التنبيهات: <span id="notifStatus">جارٍ الطلب…</span></span>
+        <button class="btn warn" id="resetBtn">↺ إعادة الضبط</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap grid">
+    <table id="schedule">
+      <thead>
+        <tr>
+          <th class="narrow">↕️</th>
+          <th class="narrow">✔️</th>
+          <th class="time">من – إلى</th>
+          <th>النشاط</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="wrap grid" style="margin-top:12px; padding:12px">
+    <h3 style="margin:8px 0">إحصائيات اليوم</h3>
+    <canvas id="statsChart" height="120"></canvas>
+  </div>
+
+  <p class="footer">نصيحة: 50 دقيقة تركيز + 10 دقائق راحة. عدّل الجدول بحرية وفق يومك 🤍</p>
+
+  <div id="toast" class="toast">تم الحفظ ✅</div>
+
+  <script>
+    const tbody = document.querySelector('#schedule tbody');
+    const toast = document.getElementById('toast');
+    const notifStatus = document.getElementById('notifStatus');
+    const DEFAULT_ROWS = [
+      {time:'05:30 - 06:00', task:'صلاة الفجر + أذكار الصباح', done:false},
+      {time:'06:00 - 07:00', task:'رياضة خفيفة / مشي', done:false},
+      {time:'07:00 - 08:00', task:'إفطار + استعداد لليوم', done:false},
+      {time:'08:00 - 12:00', task:'دراسة/برمجة مركزة', done:false},
+      {time:'12:00 - 12:30', task:'صلاة الظهر + استراحة', done:false},
+      {time:'12:30 - 14:00', task:'مذاكرة خفيفة / مراجعة', done:false},
+      {time:'14:00 - 15:00', task:'غداء + قيلولة', done:false},
+      {time:'15:00 - 16:30', task:'هواية (رسم/مشروع شخصي)', done:false},
+      {time:'16:30 - 17:00', task:'صلاة العصر + استرخاء', done:false},
+      {time:'17:00 - 19:00', task:'عائلة/أصدقاء/خروج', done:false},
+      {time:'19:00 - 19:30', task:'صلاة المغرب + قرآن', done:false},
+      {time:'19:30 - 21:00', task:'تعلّم/تطوير ذاتي', done:false},
+      {time:'21:00 - 21:30', task:'صلاة العشاء + أذكار المساء', done:false},
+      {time:'21:30 - 22:30', task:'ترفيه خفيف', done:false},
+      {time:'22:30 - 23:00', task:'تحضير للغد', done:false},
+      {time:'23:00 - 05:30', task:'نوم', done:false},
+    ];
+
+    const STORAGE_KEY = 'life_schedule_interactive_v3';
+    const THEME_KEY = 'life_theme';
+    const NOTIF_LOG_KEY = 'life_notified_log';
+
+    const $ = sel => document.querySelector(sel);
+
+    function showToast(msg='تم الحفظ ✅'){
+      toast.textContent = msg; toast.classList.add('show');
+      setTimeout(()=> toast.classList.remove('show'), 1400);
+    }
+
+    function load(){
+      const raw = localStorage.getItem(STORAGE_KEY);
+      let rows = DEFAULT_ROWS;
+      if(raw){ try{ rows = JSON.parse(raw); }catch{ rows = DEFAULT_ROWS; } }
+      return rows;
+    }
+    function save(rows){ localStorage.setItem(STORAGE_KEY, JSON.stringify(rows)); }
+
+    function render(rows){
+      tbody.innerHTML = '';
+      for(const r of rows){
+        const tr = document.createElement('tr');
+        tr.draggable = true;
+        if(r.done) tr.classList.add('done');
+        tr.innerHTML = `
+          <td class="narrow drag-handle" title="اسحب لإعادة الترتيب">⋮⋮</td>
+          <td class="narrow"><input type="checkbox" ${r.done?'checked':''}></td>
+          <td contenteditable="true" class="time">${escapeHtml(r.time)}</td>
+          <td contenteditable="true">${escapeHtml(r.task)}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+      wireRowEvents();
+      updateChart();
+    }
+
+    function escapeHtml(s=''){ return s.replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[m])); }
+
+    function getRows(){
+      const rows = [];
+      tbody.querySelectorAll('tr').forEach(tr=>{
+        rows.push({
+          done: tr.querySelector('input[type=checkbox]').checked,
+          time: tr.children[2].textContent.trim(),
+          task: tr.children[3].textContent.trim()
+        });
+      });
+      return rows;
+    }
+
+    // Drag & Drop
+    function wireRowEvents(){
+      let dragged;
+      tbody.querySelectorAll('tr').forEach(tr=>{
+        tr.addEventListener('dragstart', e=>{ dragged = tr; tr.classList.add('dragging'); });
+        tr.addEventListener('dragend', e=>{ tr.classList.remove('dragging'); save(getRows()); showToast(); });
+        tr.addEventListener('dragover', e=>{ e.preventDefault(); const target = e.currentTarget; if(target!==dragged){ tbody.insertBefore(dragged, target); } });
+        tr.querySelector('input[type=checkbox]').addEventListener('change', e=>{ tr.classList.toggle('done', e.target.checked); save(getRows()); updateChart(); });
+        tr.querySelectorAll('td[contenteditable]')?.forEach(td=> td.addEventListener('input', ()=>{ save(getRows()); updateChart(); }));
+      });
+    }
+
+    // Buttons
+    $('#addRowBtn').addEventListener('click', ()=>{ tbody.insertAdjacentHTML('beforeend', `
+      <tr draggable="true">
+        <td class="narrow drag-handle">⋮⋮</td>
+        <td class="narrow"><input type="checkbox"></td>
+        <td contenteditable="true" class="time">00:00 - 00:00</td>
+        <td contenteditable="true">نشاط جديد</td>
+      </tr>`); wireRowEvents(); save(getRows()); showToast('تمت إضافة نشاط ➕'); updateChart(); });
+
+    $('#resetBtn').addEventListener('click', ()=>{
+      if(confirm('هل تريد إعادة الجدول إلى القالب الأصلي؟')){ render(DEFAULT_ROWS); save(DEFAULT_ROWS); showToast('تمت إعادة الضبط ↺'); }
+    });
+
+    // Theme
+    (function initTheme(){
+      const savedTheme = localStorage.getItem(THEME_KEY);
+      if(savedTheme==='dark') document.body.classList.add('dark');
+      $('#toggleDark').addEventListener('click', ()=>{
+        document.body.classList.toggle('dark');
+        localStorage.setItem(THEME_KEY, document.body.classList.contains('dark')?'dark':'light');
+      });
+    })();
+
+    // Export/Import
+    $('#exportBtn').addEventListener('click', ()=>{
+      const blob = new Blob([JSON.stringify(getRows(), null, 2)], {type:'application/json'});
+      const url = URL.createObjectURL(blob); const a = document.createElement('a');
+      a.href = url; a.download = 'life-schedule.json'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    });
+    $('#importFile').addEventListener('change', async (e)=>{
+      const f = e.target.files[0]; if(!f) return; const text = await f.text();
+      try{ const data = JSON.parse(text); if(Array.isArray(data)){ render(data); save(data); showToast('تم الاستيراد ✅'); } else alert('ملف غير صالح'); }
+      catch{ alert('تعذّر قراءة الملف'); }
+      e.target.value = '';
+    });
+
+    // Notifications (in-page + نظام الإشعارات إن وُجد)
+    async function initNotifications(){
+      try{
+        if(!('Notification' in window)) { notifStatus.textContent = 'غير مدعومة'; return; }
+        let perm = Notification.permission;
+        if(perm === 'default') perm = await Notification.requestPermission();
+        notifStatus.textContent = (perm==='granted') ? 'مفعّلة' : 'مرفوضة';
+      }catch{ notifStatus.textContent = 'غير متاحة'; }
+    }
+    initNotifications();
+
+    function timeToMinutes(hhmm){
+      const m = hhmm.match(/^(\d{2}):(\d{2})$/); if(!m) return null; return (+m[1])*60 + (+m[2]);
+    }
+    function parseRange(s){
+      const m = s.match(/(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})/); if(!m) return null; return {from:m[1], to:m[2]};
+    }
+
+    function checkNotifications(){
+      const now = new Date();
+      const keyPrefix = new Date().toISOString().slice(0,10); // YYYY-MM-DD
+      const notified = new Set(JSON.parse(localStorage.getItem(NOTIF_LOG_KEY) || '[]'));
+      const cur = (n=> `${String(n.getHours()).padStart(2,'0')}:${String(n.getMinutes()).padStart(2,'0')}`)(now);
+
+      tbody.querySelectorAll('tr').forEach((tr, idx)=>{
+        const task = tr.children[3].textContent.trim();
+        const range = parseRange(tr.children[2].textContent.trim());
+        if(!range) return;
+        // إشعار عند بداية النشاط
+        if(range.from === cur){
+          const id = `${keyPrefix}-${idx}-${range.from}`;
+          if(!notified.has(id)){
+            inPageNotify(`حان وقت: ${task} (${range.from})`);
+            try{ if('Notification' in window && Notification.permission==='granted'){ new Notification('تنبيه الجدول', { body: `حان وقت: ${task}`, dir:'rtl' }); } }catch{}
+            notified.add(id);
+          }
+        }
+      });
+      localStorage.setItem(NOTIF_LOG_KEY, JSON.stringify(Array.from(notified)));
+    }
+
+    function inPageNotify(msg){ showToast(msg); }
+
+    setInterval(checkNotifications, 30000); // فحص كل 30 ثانية
+
+    // Chart — يحسب بالمدة الفعلية إن أمكن
+    let chart;
+    function updateChart(){
+      const map = new Map();
+      tbody.querySelectorAll('tr').forEach(tr=>{
+        const name = tr.children[3].textContent.trim() || 'غير مسمى';
+        const range = parseRange(tr.children[2].textContent.trim());
+        let val = 1; // افتراضي
+        if(range){
+          const a = timeToMinutes(range.from); const b = timeToMinutes(range.to);
+          if(a!=null && b!=null){ val = (b - a + 1440) % 1440; if(val===0) val = 1; }
+        }
+        map.set(name, (map.get(name)||0) + val);
+      });
+      const labels = Array.from(map.keys());
+      const data = Array.from(map.values());
+
+      const ctx = document.getElementById('statsChart').getContext('2d');
+      if(chart) chart.destroy();
+      chart = new Chart(ctx, {
+        type:'pie',
+        data:{ labels, datasets:[{ data, backgroundColor:['#22c55e','#0ea5e9','#f59e0b','#ef4444','#8b5cf6','#14b8a6','#f97316','#84cc16','#06b6d4'] }]},
+        options:{ responsive:true, plugins:{ legend:{ position:'bottom' } } }
+      });
+    }
+
+    // Init
+    (function init(){
+      // Theme init
+      if(localStorage.getItem('life_theme')==='dark') document.body.classList.add('dark');
+      // Render
+      render(load());
+    })();
+  </script>
+</body>
+</html>
